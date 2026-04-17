@@ -1,0 +1,67 @@
+name: "RTC Reward Action"
+description: "Awards RTC tokens to contributors when their PRs are merged"
+branding:
+  icon: "award"
+  color: "green"
+version: "v1.0.0"
+author: "RTC Team"
+
+inputs:
+  rtc_amount:
+    description: "Amount of RTC tokens to award per merged PR"
+    required: true
+    default: "10"
+  node_url:
+    description: "RTC Node URL for wallet operations"
+    required: true
+    default: "https://50.28.86.131"
+  miner_id:
+    description: "Miner ID for wallet authentication"
+    required: true
+  dry_run:
+    description: "Run in dry-run mode (no actual transfers)"
+    required: false
+    default: "false"
+  private_key:
+    description: "Ed25519 private key for signing transactions (base64 encoded)"
+    required: true
+
+outputs:
+  recipient_wallet:
+    description: "The wallet address that received the reward"
+  amount:
+    description: "The amount of RTC tokens transferred"
+  tx_hash:
+    description: "The transaction hash of the transfer"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+    
+    - name: Install dependencies
+      shell: bash
+      run: pip install requests PyNaCl
+    
+    - name: Run RTC Reward
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: python3 entrypoint.py
+      env:
+        INPUT_RTC_AMOUNT: ${{ inputs.rtc_amount }}
+        INPUT_NODE_URL: ${{ inputs.node_url }}
+        INPUT_MINER_ID: ${{ inputs.miner_id }}
+        INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        INPUT_PRIVATE_KEY: ${{ inputs.private_key }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_ACTOR: ${{ github.actor }}
+        GITHUB_EVENT_PATH: ${{ github.event_path }}
+        GITHUB_OUTPUT: ${{ github.output }}
+
+requirements:
+  - requests>=2.28.0
+  - PyNaCl>=1.5.0
