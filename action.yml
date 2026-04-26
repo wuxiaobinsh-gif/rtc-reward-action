@@ -1,67 +1,82 @@
-name: "RTC Reward Action"
-description: "Awards RTC tokens to contributors when their PRs are merged"
-branding:
-  icon: "award"
-  color: "green"
-version: "v1.0.0"
-author: "RTC Team"
+name: RTC Reward Action
+
+description: Automatically award RTC tokens when a PR is merged. Add this to any repo to turn it into a bounty platform.
+
+author: wuxiaobinsh-gif
 
 inputs:
-  rtc_amount:
-    description: "Amount of RTC tokens to award per merged PR"
+  node-url:
+    description: RTC node URL
+    required: false
+    default: https://50.28.86.131
+  amount:
+    description: RTC amount per merged PR
+    required: false
+    default: "5"
+  wallet-from:
+    description: Project wallet name for sending RTC
     required: true
-    default: "10"
-  node_url:
-    description: "RTC Node URL for wallet operations"
+  admin-key:
+    description: Admin key for the RTC node
     required: true
-    default: "https://50.28.86.131"
-  miner_id:
-    description: "Miner ID for wallet authentication"
-    required: true
-  dry_run:
-    description: "Run in dry-run mode (no actual transfers)"
+  dry-run:
+    description: If true, simulate payment without actually sending
     required: false
     default: "false"
-  private_key:
-    description: "Ed25519 private key for signing transactions (base64 encoded)"
-    required: true
-
-outputs:
-  recipient_wallet:
-    description: "The wallet address that received the reward"
-  amount:
-    description: "The amount of RTC tokens transferred"
-  tx_hash:
-    description: "The transaction hash of the transfer"
 
 runs:
-  using: "composite"
+  using: composite
   steps:
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.x'
-    
-    - name: Install dependencies
+    - name: Parse PR for wallet
+      id: parse-wallet
       shell: bash
-      run: pip install requests PyNaCl
-    
-    - name: Run RTC Reward
-      shell: bash
-      working-directory: ${{ github.action_path }}
-      run: python3 entrypoint.py
-      env:
-        INPUT_RTC_AMOUNT: ${{ inputs.rtc_amount }}
-        INPUT_NODE_URL: ${{ inputs.node_url }}
-        INPUT_MINER_ID: ${{ inputs.miner_id }}
-        INPUT_DRY_RUN: ${{ inputs.dry_run }}
-        INPUT_PRIVATE_KEY: ${{ inputs.private_key }}
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        GITHUB_REPOSITORY: ${{ github.repository }}
-        GITHUB_ACTOR: ${{ github.actor }}
-        GITHUB_EVENT_PATH: ${{ github.event_path }}
-        GITHUB_OUTPUT: ${{ github.output }}
+      run: |
+        BODY="${{ github.event.pull_request.body }}"
+        
+        # Try to find wallet in PR body
+        WALLET=""
+        if echo "$BODY" | grep -qi "rtc-wallet:"; then
+          WALLET=$(echo "$BODY" | grep -i "rtc-wallet:" | sed 's/.*rtc-wallet:[[:space:]]*//i' | awk '{print $1}' | tr -d '`')
+        elif echo "$BODY" | grep -qi "wallet:"; then
+          WALLET=$(echo "$BODY" | grep -i "wallet:" | grep -i "rtc" | sed 's/.*wallet:[[:space:]]*//i' | awk '{print $1}' | tr -d '`')
+        fi
+        
+        if [ -z "$WALLET" ]; then
+          echo "No wallet found"
+          echo "wallet_found=false" >> $GITHUB_OUTPUT
+        else
+          echo "Found wallet: $WALLET"
+          echo "wallet_found=true" >> $GITHUB_OUTPUT
+          echo "contributor_wallet=$WALLET" >> $GITHUB_OUTPUT
+        fi
 
-requirements:
-  - requests>=2.28.0
-  - PyNaCl>=1.5.0
+    - name: Check if dry run
+      if: inputs.dry-run == 'true'
+      run: |
+        echo "=== DRY RUN MODE ==="
+        echo "Would pay ${{ inputs.amount }} RTC to ${{ github.event.pull_request.user.login }}"
+        echo "========================"
+
+    - name: Award RTC
+      if: inputs.dry-run != 'true' && steps.parse-wallet.outputs.wallet_found == 'true'
+      shell: bash
+      env:
+        AMOUNT: ${{ inputs.amount }}
+      run: |
+        WALLET="${{ steps.parse-wallet.outputs.contributor_wallet }}"
+        curl -s -X POST "${{ inputs.node-url }}/api/transfer" \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer ${{ inputs.admin-key }}" \
+          -d "{\"to\": \"$WALLET\", \"amount\": $AMOUNT, \"from\": \"${{ inputs.wallet-from }}\", \"memo\": \"PR #${{ github.event.pull_request.number }} merged\"}"
+
+    - name: Post reward comment
+      if: inputs.dry-run != 'true' && steps.parse-wallet.outputs.wallet_found == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.payload.pull_request.number,
+            body: `## 🎉 PR Merged — RTC Reward\n\n**Contributor:** @${context.payload.pull_request.user.login}\n**Amount:** ${process.env.AMOUNT} RTC\n**PR:** #${context.payload.pull_request.number}\n**Merged by:** @${context.actor}\n\nYour RTC reward has been processed!`
+          })
